@@ -135,7 +135,7 @@ class ModelWorker:
                 if b64_image is not None and self.is_multimodal:
                     image = load_image_from_base64(b64_image)            
                     image = process_images(image, image_processor)
-                    image = image.to(self.model.device, dtype=torch.float16)
+                    image = image.to(self.device, dtype=torch.float16)
                 else:
                     image = None
            
@@ -151,7 +151,7 @@ class ModelWorker:
             batch = {}
             batch['caption'] = [prompt]
             # White PIL image
-            batch['image'] = torch.zeros((3, 256, 256), dtype=torch.float16).to(self.model.device)
+            batch['image'] = torch.zeros((3, 256, 256), dtype=torch.float16).to(self.device)
             generate_method = model.model.generate_text2svg
             
         if max_new_tokens < 1:
@@ -198,6 +198,18 @@ class ModelWorker:
                 "error_code": 1,
             }
             yield json.dumps(ret).encode() + b"\0"
+        except (torch.mps.MPSError, RuntimeError) as e:
+            # Handle MPS errors - sometimes they come as RuntimeError
+            if "MPS" in str(e):
+                print("Caught MPS Error:", e)
+                ret = {
+                    "text": server_error_msg,
+                    "error_code": 1,
+                }
+                yield json.dumps(ret).encode() + b"\0"
+            else:
+                # Re-raise if it's not an MPS error
+                raise
         except Exception as e:
             print("Caught Unknown Error", e)
             ret = {

@@ -98,6 +98,58 @@ git pull
 pip install -e .
 ```
 
+## Mac Studio Hardware Acceleration
+
+To utilize Apple Silicon's GPU acceleration on Mac Studio:
+
+1. Make sure you have PyTorch 2.0+ installed with MPS support:
+```bash
+pip install torch torchvision
+```
+
+2. When loading the model, specify the device as "mps" instead of "cuda":
+```python
+from starvector.model.starvector_arch import StarVectorForCausalLM
+import torch
+
+model_name = "starvector/starvector-8b-im2svg"
+
+# Check if MPS is available
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# Load model with specified device
+starvector = StarVectorForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16)
+starvector.to(device)
+starvector.eval()
+
+# Process images with MPS device
+image_pil = Image.open('assets/examples/sample-0.png')
+# The process_images method handles device placement
+image = starvector.process_images([image_pil])[0].to(device)
+batch = {"image": image}
+
+# Generate with hardware acceleration
+raw_svg = starvector.generate_im2svg(batch, max_length=1000)[0]
+```
+
+3. For configuration files, update the device setting in your config YAML:
+```yaml
+# In your config file (e.g., configs/generation/custom/im2svg.yaml)
+run:
+  device: mps  # Change from 'cuda' to 'mps'
+```
+
+4. When using validation or inference scripts, pass the device parameter:
+```bash
+python starvector/validation/validate.py \
+config=configs/generation/hf/starvector-8b/im2svg.yaml \
+dataset.name=starvector/svg-stack \
+run.device=mps
+```
+
+Note: While the StarVector models are designed to work with CUDA, they can utilize MPS acceleration on Mac Studio. However, some operations might still require CPU fallback. For optimal performance, smaller models like StarVector-1B are recommended on Mac Studio hardware.
+
 ## Quick Start - Image2SVG Generation
 
 ```Python
@@ -148,6 +200,62 @@ raw_svg = starvector.generate_im2svg(batch, max_length=4000)[0]
 svg, raster_image = process_and_rasterize_svg(raw_svg)
 ```
 
+### Mac Studio Acceleration
+
+For Mac Studio with Apple Silicon, replace the `.cuda()` calls with MPS device placement:
+
+```Python
+import torch
+from PIL import Image
+from starvector.model.starvector_arch import StarVectorForCausalLM
+from starvector.data.util import process_and_rasterize_svg
+
+# Check if MPS is available
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+model_name = "starvector/starvector-8b-im2svg" 
+# Or use the smaller model for better performance on Mac Studio
+# model_name = "starvector/starvector-1b-im2svg"
+
+starvector = StarVectorForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16)
+starvector.to(device)
+starvector.eval()
+
+image_pil = Image.open('assets/examples/sample-0.png')
+image = starvector.process_images([image_pil])[0].to(device)
+batch = {"image": image}
+
+raw_svg = starvector.generate_im2svg(batch, max_length=1000)[0]
+svg, raster_image = process_and_rasterize_svg(raw_svg)
+```
+
+Similarly, when using HuggingFace AutoModel on Mac Studio:
+
+```Python
+import torch
+from PIL import Image
+from transformers import AutoModelForCausalLM, AutoProcessor
+from starvector.data.util import process_and_rasterize_svg
+
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+model_name = "starvector/starvector-1b-im2svg"  # Smaller model recommended for Mac Studio
+
+starvector = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, trust_remote_code=True)
+processor = starvector.model.processor
+tokenizer = starvector.model.svg_transformer.tokenizer
+
+starvector.to(device)
+starvector.eval()
+
+image_pil = Image.open('assets/examples/sample-18.png')
+image = processor(image_pil, return_tensors="pt")['pixel_values'].to(device)
+if not image.shape[0] == 1:
+    image = image.squeeze(0)
+batch = {"image": image}
+
+raw_svg = starvector.generate_im2svg(batch, max_length=4000)[0]
+svg, raster_image = process_and_rasterize_svg(raw_svg)
+```
 
 ## Models
 
@@ -273,6 +381,73 @@ torchrun \
 
 We also provide shell scripts in `scripts/train/*` 
 
+### Training on Mac Studio (Apple Silicon)
+
+For Mac Studio users who want to utilize Apple Silicon GPU acceleration for training:
+
+1. Create a Mac-specific Accelerate config file:
+
+```bash
+# Create a new config file: configs/accelerate/mac-studio.yaml
+cat > configs/accelerate/mac-studio.yaml << 'EOF'
+compute_environment: LOCAL_MACHINE
+deepspeed_config: {}
+distributed_type: MPS
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+mixed_precision: 'bf16'  # or 'fp16' depending on model
+num_machines: 1
+num_processes: 1
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+EOF
+```
+
+2. For StarVector-1B training on Mac Studio:
+
+```bash
+# Use MPS acceleration for StarVector-1B
+accelerate launch --config_file configs/accelerate/mac-studio.yaml \
+  starvector/train/train.py \
+  config=configs/models/starvector-1b/im2svg-stack.yaml \
+  training.model_precision=fp16
+```
+
+3. Modify the configuration to accommodate Mac Studio memory constraints:
+
+```yaml
+# Create a custom config for Mac Studio:
+# configs/models/starvector-1b/im2svg-stack-mac.yaml
+
+# Start with the base config
+_base_: configs/models/starvector-1b/im2svg-stack.yaml
+
+# Override with Mac-specific settings
+training:
+  batch_size: 1  # Smaller batch size for Mac Studio memory
+  gradient_accumulation_steps: 8  # Increase to compensate for smaller batch size
+  mixed_precision: bf16  # bf16 for better performance on Apple Silicon
+  model_precision: fp16  # fp16 for Apple Silicon
+
+run:
+  device: mps  # Use Apple Silicon GPU
+```
+
+4. Then run training with the Mac-specific configuration:
+
+```bash
+accelerate launch --config_file configs/accelerate/mac-studio.yaml \
+  starvector/train/train.py \
+  config=configs/models/starvector-1b/im2svg-stack-mac.yaml
+```
+
+Note: Training the larger StarVector-8B model on Mac Studio may not be feasible due to memory constraints. We recommend using the 1B model for fine-tuning on Mac Studio hardware, or consider using cloud GPU resources for larger models.
+
 ## Validation on SVG Benchmarks (⭐ SVG-Bench)
 
 We validate StarVector on ⭐ SVG-Bench Benchmark. We provide the SVGValidator class that allows you to run StarVector using **1) the HuggingFace generation backend** or **2) the VLLM backend**. The later is substantially faster thanks to the use of Paged Attention. 
@@ -318,12 +493,63 @@ dataset.name=starvector/svg-stack
 
 We provide evaluation scripts in `scripts/eval/*`
 
+### Mac Studio Validation
+
+For Mac Studio users, run validation scripts with the MPS device specified:
+
+```bash
+# StarVector-1B on SVG-Stack with Mac Studio hardware acceleration
+python starvector/validation/validate.py \
+config=configs/generation/hf/starvector-1b/im2svg.yaml \
+dataset.name=starvector/svg-stack \
+run.device=mps \
+run.batch_size=1  # Reduced batch size for Mac Studio memory
+```
+
+Create a custom validation config for Mac Studio to ensure proper device usage:
+
+```yaml
+# configs/generation/hf/mac-studio/im2svg.yaml
+_base_: configs/generation/hf/starvector-1b/im2svg.yaml
+
+# Mac Studio specific settings
+run:
+  device: mps
+  batch_size: 1  # Smaller batch size for memory constraints
+```
+
+Then use it with:
+
+```bash
+python starvector/validation/validate.py \
+config=configs/generation/hf/mac-studio/im2svg.yaml \
+dataset.name=starvector/svg-stack
+```
 
 ## StarVector Demo
 
 The demo provides two options for converting images to SVG code:
 1. HuggingFace generation functionality
 2. VLLM (recommended) - offers faster generation speed
+
+### Mac Studio Demo Setup
+
+For Mac Studio users, only the HuggingFace generation option is fully supported with MPS acceleration. VLLM currently lacks MPS support.
+
+#### Launch a controller for Mac Studio
+```Shell
+python -m starvector.serve.controller --host 0.0.0.0 --port 10000
+```
+
+#### Launch a gradio web server
+```Shell
+python -m starvector.serve.gradio_web_server --controller http://localhost:10000 --model-list-mode reload --port 7000
+```
+
+#### Launch a model worker with MPS acceleration
+```Shell
+python -m starvector.serve.model_worker --host 0.0.0.0 --controller http://localhost:10000 --port 40000 --worker http://localhost:40000 --model-path starvector/starvector-1b-im2svg --device mps
+```
 
 ### Option 1: HuggingFace Generation with Gradio Web UI
 

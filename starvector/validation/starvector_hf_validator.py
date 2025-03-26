@@ -73,13 +73,16 @@ class StarVectorHFSVGValidator(SVGValidator):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
+        # Force MPS garbage collection if device is MPS
+        elif self.config.run.device == "mps" and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         
     def generate_svg(self, batch, generate_config):
         if generate_config['temperature'] == 0:
             generate_config['temperature'] = 1.0
             generate_config['do_sample'] = False
         outputs = []
-        batch['image'] = batch['image'].to('cuda').to(self.torch_dtype)
+        batch['image'] = batch['image'].to(self.config.run.device).to(self.torch_dtype)
         # for i, batch in enumerate(batch['svg']):
         if self.task == 'im2svg':
             outputs = self.model.model.generate_im2svg(batch = batch, **generate_config)

@@ -1,10 +1,19 @@
-
 from starvector.model.starvector_arch import StarVectorForCausalLM, StarVectorConfig
 from starvector.data.base import ImageTrainProcessor
 from starvector.util import dtype_mapping
 from transformers import AutoConfig
+import torch
 
 def load_pretrained_model(model_path, device="cuda", **kwargs):
+    # If device is "cuda" but not available, try MPS, then fall back to CPU
+    if device == "cuda" and not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            device = "mps"
+            print(f"CUDA not available, using MPS device instead")
+        else:
+            device = "cpu"
+            print(f"CUDA and MPS not available, falling back to CPU")
+    
     model = StarVectorForCausalLM.from_pretrained(model_path, **kwargs).to(device)
     tokenizer = model.model.svg_transformer.tokenizer
     image_processor = ImageTrainProcessor()

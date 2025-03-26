@@ -1,5 +1,15 @@
 from PIL import Image
 from vllm import LLM, SamplingParams
+import torch
+
+# Note: VLLM currently only supports CUDA devices and doesn't support MPS/Metal acceleration
+# If using a Mac with Apple Silicon, this script will fall back to CPU (very slow)
+# or you should use the non-VLLM quickstart scripts instead
+
+# Check if CUDA is available
+if not torch.cuda.is_available():
+    print("WARNING: VLLM requires CUDA. This script will be very slow on CPU.")
+    print("On Mac with Apple Silicon, please use the regular quickstart.py script instead.")
 
 model_name = "starvector/starvector-1b-im2svg"
 # model_name = "starvector/starvector-8b-im2svg"
