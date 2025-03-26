@@ -7,16 +7,27 @@ from starvector.util import print_trainable_parameters
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 
 class StoppingCriteriaSub(StoppingCriteria):
+    """More efficient implementation of stopping criteria for MPS/Mac compatibility"""
 
     def __init__(self, stops=[]):
-        super().__init__()  # Correct super() call
+        super().__init__()
         self.stops = stops
+        # Convert each stop sequence to a tuple for faster comparison
+        self.stop_tuples = [tuple(s) for s in stops]
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        # Check if any of the stop sequences are in the input_ids
-        for stop_ids in self.stops:
-            if input_ids[0][-len(stop_ids):].tolist() == stop_ids:
-                return True
+        # Only look at the most recent sentence
+        for i, input_id in enumerate(input_ids):
+            # For each stop sequence
+            for stop_ids in self.stops:
+                stop_len = len(stop_ids)
+                # Only check the end portion that matches stop_ids length
+                if input_id.shape[0] >= stop_len:
+                    # Avoid unnecessary tensor operations if possible
+                    # Convert end of sequence to list (more efficient than many tensor ops)
+                    last_tokens = input_id[-stop_len:].cpu().tolist()
+                    if last_tokens == stop_ids:
+                        return True
         return False
 
 class StarVectorBase(nn.Module, ABC):
@@ -225,36 +236,78 @@ class StarVectorBase(nn.Module, ABC):
         # Get token IDs for "</svg>"
         end_sequence = self.svg_transformer.tokenizer("</svg>", add_special_tokens=False)['input_ids']
         stopping_criteria = StoppingCriteriaList([StoppingCriteriaSub(stops=[end_sequence])])
+        
+        # Ensure the tokenizer has a model_max_length set
+        if not hasattr(self.svg_transformer.tokenizer, 'model_max_length') or self.svg_transformer.tokenizer.model_max_length == float('inf'):
+            self.svg_transformer.tokenizer.model_max_length = 2048
+            print(f"Set tokenizer model_max_length to 2048")
+            
+        # Use the tokenizer's model_max_length as default if max_length not provided
+        default_max_length = min(base_kwargs.get('max_length', self.svg_transformer.tokenizer.model_max_length), 2048)
+        
+        # Fix early_stopping and length_penalty when num_beams=1
+        num_beams = base_kwargs.get('num_beams', 2)
+        early_stopping = base_kwargs.get('early_stopping', True)
+        length_penalty = base_kwargs.get('length_penalty', 1.0)
+        
+        if num_beams == 1:
+            # These parameters only make sense with beam search
+            early_stopping = False
+            length_penalty = None
+            
         return {
             'inputs_embeds': base_kwargs['inputs_embeds'],
             'attention_mask': base_kwargs['attention_mask'],
             'do_sample': base_kwargs.get('use_nucleus_sampling', True),
             'top_p': base_kwargs.get('top_p', 0.9),
             'temperature': base_kwargs.get('temperature', 1),
-            'num_beams': base_kwargs.get('num_beams', 2),
-            'max_length': base_kwargs.get('max_length', 30),
+            'num_beams': num_beams,
+            'max_length': default_max_length,
             'min_length': base_kwargs.get('min_length', 1),
+            'max_new_tokens': base_kwargs.get('max_new_tokens', 500),  # Explicit control
             'repetition_penalty': base_kwargs.get('repetition_penalty', 1.0),
-            'length_penalty': base_kwargs.get('length_penalty', 1.0),
+            'length_penalty': length_penalty,
+            'early_stopping': early_stopping,
             'use_cache': base_kwargs.get('use_cache', True),
             'stopping_criteria': stopping_criteria
         }
     
     def generate_im2svg(self, batch, **kwargs):
-        """Base implementation of image to SVG generation"""
+        """Base implementation of image to SVG generation optimized for Mac/MPS"""
+        import gc
+        
+        # Prepare generation inputs
         inputs_embeds, attention_mask, prompt_tokens = self._prepare_generation_inputs(
             batch, kwargs.get('prompt'), batch["image"].device
         )
         
+        # Get generation parameters
         generation_kwargs = self._get_generation_kwargs(
             {**kwargs, 'inputs_embeds': inputs_embeds, 'attention_mask': attention_mask}
         )
-        # Let subclasses override these defaults if needed
+        
+        # Let subclasses override defaults if needed
         generation_kwargs.update(self._get_im2svg_specific_kwargs(kwargs))
         
+        # Run generation
         outputs = self.svg_transformer.transformer.generate(**generation_kwargs)
-        outputs = torch.cat([prompt_tokens.input_ids, outputs], dim=1)
-        raw_svg = self.svg_transformer.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        
+        # Concatenate outputs with prompt
+        final_outputs = torch.cat([prompt_tokens.input_ids, outputs], dim=1)
+        
+        # Decode to text
+        raw_svg = self.svg_transformer.tokenizer.batch_decode(final_outputs, skip_special_tokens=True)
+        
+        # Clean up tensors to save memory
+        del inputs_embeds, attention_mask, prompt_tokens, outputs, final_outputs
+        gc.collect()
+        
+        # Clear GPU memory if available
+        device = batch["image"].device
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif device.type == "mps" and hasattr(torch.mps, 'empty_cache'):
+            torch.mps.empty_cache()
 
         return raw_svg
 

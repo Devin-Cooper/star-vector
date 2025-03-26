@@ -1,4 +1,5 @@
 import torch.nn as nn
+import os
 from transformers import (
     AutoConfig, 
     AutoModelForCausalLM, 
@@ -19,10 +20,26 @@ class StarCoderModel(nn.Module):
         model_config = AutoConfig.from_pretrained(config.starcoder_model_name, trust_remote_code=True)
         model_config.use_cache = config.use_cache
         model_config.use_bfloat16 = True
+        
+        # Handle flash attention based on environment and device type
+        attn_implementation = None
+        if config.use_flash_attn:
+            # Check if we should disable flash attention (e.g., on Mac)
+            if os.environ.get("STARVECTOR_DISABLE_FLASH_ATTN", "0") == "1":
+                print("FlashAttention disabled via environment variable for Mac compatibility")
+            else:
+                try:
+                    # Try to import flash_attn to see if it's available
+                    import flash_attn
+                    attn_implementation = "flash_attention_2"
+                    print("FlashAttention 2 enabled")
+                except ImportError:
+                    print("FlashAttention not available, using standard attention")
+        
         model = AutoModelForCausalLM.from_pretrained(
             config.starcoder_model_name, 
             config=model_config, 
-            attn_implementation="flash_attention_2", 
+            attn_implementation=attn_implementation, 
             torch_dtype=torch.bfloat16, 
             trust_remote_code=True)
         model.resize_token_embeddings(len(self.tokenizer))

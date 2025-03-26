@@ -13,6 +13,18 @@ fi
 echo "==== Installing StarVector for Mac Studio ===="
 echo "This script will install StarVector with MPS support for your Mac Studio."
 
+# Disable Flash Attention for Mac
+export STARVECTOR_DISABLE_FLASH_ATTN=1
+echo "Flash Attention disabled for Mac compatibility"
+
+# Login to HuggingFace
+echo "Authenticating with HuggingFace..."
+export HF_TOKEN=""
+# Install the CLI if not already installed
+pip install -q huggingface_hub
+# Login with token
+echo -e "y\n$HF_TOKEN" | huggingface-cli login --token $HF_TOKEN
+
 # Add conda-forge channel and install dependencies 
 echo "Installing conda-forge dependencies..."
 conda config --add channels conda-forge
@@ -72,6 +84,13 @@ rm test.svg test.png
 # Test StarVector import
 echo "Testing starvector import..."
 python -c "from starvector.model.starvector_arch import StarVectorForCausalLM; print('Import successful!')"
+
+# Set permanent environment variables for this conda env
+mkdir -p $CONDA_PREFIX/etc/conda/activate.d
+echo '#!/bin/bash
+export STARVECTOR_DISABLE_FLASH_ATTN=1
+' > $CONDA_PREFIX/etc/conda/activate.d/starvector-env.sh
+chmod +x $CONDA_PREFIX/etc/conda/activate.d/starvector-env.sh
 
 echo "==== Installation Complete ===="
 echo "To run StarVector on your Mac Studio:"

@@ -16,6 +16,10 @@ fi
 
 echo "Running in conda environment: $CONDA_DEFAULT_ENV"
 
+# Disable Flash Attention for Mac Studio
+export STARVECTOR_DISABLE_FLASH_ATTN=1
+# This environment variable will be checked by the model to disable flash attention
+
 # Check if MPS is available
 python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available()}')"
 

@@ -17,7 +17,13 @@ else:
     device = "cpu"
     print("WARNING: Using CPU for inference which will be very slow")
 
-starvector = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch_dtype, trust_remote_code=True)
+# Explicitly disable flash attention for Mac compatibility
+starvector = AutoModelForCausalLM.from_pretrained(
+    model_name, 
+    torch_dtype=torch_dtype, 
+    trust_remote_code=True,
+    use_flash_attn=False
+)
 processor = starvector.model.processor
 tokenizer = starvector.model.svg_transformer.tokenizer
 

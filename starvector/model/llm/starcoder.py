@@ -1,4 +1,5 @@
 import torch.nn as nn
+import os
 from transformers import (
     AutoConfig, 
     AutoModelForCausalLM, 
@@ -21,11 +22,31 @@ class StarCoderModel(nn.Module):
         model_config.eos_token_id = self.tokenizer.eos_token_id
         model_config.pad_token_id = self.tokenizer.pad_token_id
         model_config.bos_token_id = self.tokenizer.bos_token_id
+        
+        # Handle flash attention safely for Mac (MPS) compatibility
         try:
-            model_config.flash_attention = config.use_flash_attn
-            model_config._attn_implementation = "flash_attention_2"
+            # Only enable flash attention if explicitly specified and not on Mac/MPS
+            use_flash_attn = config.use_flash_attn
+            if os.environ.get("STARVECTOR_DISABLE_FLASH_ATTN", "0") == "1":
+                use_flash_attn = False
+                print("FlashAttention disabled via environment variable for Mac compatibility")
+                
+            if use_flash_attn:
+                # Try to import flash_attn to see if it's available
+                import flash_attn
+                model_config.flash_attention = True
+                model_config._attn_implementation = "flash_attention_2"
+                print("FlashAttention 2 enabled")
+            else:
+                model_config.flash_attention = False
+                model_config._attn_implementation = None
+                print("Using standard attention implementation")
         except ImportError:
+            # Flash attention not available, fallback to standard attention
             config.use_flash_attn = False
+            model_config.flash_attention = False
+            model_config._attn_implementation = None
+            print("FlashAttention not available, using standard attention")
         
         # model = GPTBigCodeForCausalLM(config=model_config)
         model = AutoModelForCausalLM.from_pretrained(config.starcoder_model_name, config=model_config, **kwargs)
@@ -34,6 +55,9 @@ class StarCoderModel(nn.Module):
 
         # Prompt the model after image
         self.prompt = '<svg'
+        
+        # Setup svg start text 
+        self.svg_start_token = '\n<svg'
 
     def init_tokenizer(self, model_name):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)

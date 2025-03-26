@@ -6,6 +6,7 @@ from torch.nn import CrossEntropyLoss
 from transformers.models.gpt_bigcode.modeling_gpt_bigcode import CausalLMOutputWithCrossAttentions
 from typing import Optional, Tuple, Union
 import torch
+import os
 
 from transformers.processing_utils import ProcessorMixin
 from torchvision import transforms
@@ -191,4 +192,34 @@ class StarVectorForCausalLM(PreTrainedModel):
 
     def process_images(self, images):
         return self.model.image_encoder.process_images(images)
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        """Load a pretrained StarVector model."""
+        
+        # Check if flash_attn should be disabled (for Mac/MPS compatibility)
+        if os.environ.get("STARVECTOR_DISABLE_FLASH_ATTN", "0") == "1":
+            kwargs["use_flash_attn"] = False
+            print("FlashAttention disabled via environment variable for Mac compatibility")
+        
+        # If use_flash_attn is explicitly set, ensure it's passed to the config
+        use_flash_attn = kwargs.pop("use_flash_attn", None)
+        
+        # Call the parent class method to load the model
+        model = super(StarVectorForCausalLM, cls).from_pretrained(
+            pretrained_model_name_or_path, *model_args, **kwargs
+        )
+        
+        # Update config with flash_attn setting if provided
+        if use_flash_attn is not None:
+            model.config.use_flash_attn = use_flash_attn
+            if hasattr(model.model, 'svg_transformer') and hasattr(model.model.svg_transformer, 'transformer'):
+                # Also update the transformer config
+                if hasattr(model.model.svg_transformer.transformer.config, 'flash_attention'):
+                    model.model.svg_transformer.transformer.config.flash_attention = use_flash_attn
+                if hasattr(model.model.svg_transformer.transformer.config, '_attn_implementation'):
+                    # Set to None to use the default attention implementation
+                    model.model.svg_transformer.transformer.config._attn_implementation = None
+        
+        return model
 
