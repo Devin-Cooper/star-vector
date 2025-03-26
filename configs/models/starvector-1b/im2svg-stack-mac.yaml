@@ -1,0 +1,23 @@
+# Mac Studio specific configuration for training
+
+# Base from standard configuration
+_base_: im2svg-stack.yaml
+
+# Override with Mac-specific settings
+training:
+  batch_size: 1  # Smaller batch size for Mac Studio memory
+  gradient_accumulation_steps: 8  # Increase to compensate for smaller batch size
+  mixed_precision: fp16  # fp16 for Apple Silicon works better than bf16
+  model_precision: fp16  # fp16 for Apple Silicon
+
+run:
+  device: mps  # Use Apple Silicon GPU
+  output_dir: "outputs-mac-studio"
+
+# Optimizer & warmup
+optim:
+  lr: 5.0e-5  # Slightly lower learning rate to compensate for smaller batch
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  schedule: cosine
+  warmup_steps_factor: 0.05  # Shorter warmup for Mac Studio for faster training 

@@ -1,0 +1,29 @@
+# Mac Studio specific configuration for HF generation
+# This configuration uses MPS acceleration on Apple Silicon
+
+# Base from starvector-1b configuration
+_base_: ../starvector-1b/im2svg.yaml
+
+# Override with Mac Studio specific settings
+run:
+  device: mps  # Use Apple Silicon GPU
+  out_dir: "eval_results_mac"
+  project_name: "starvector-mac-studio-eval"
+  batch_size: 1  # Reduced batch size to accommodate memory constraints
+
+# Model configuration - use the smaller model for better performance
+model:
+  name: "starvector/starvector-1b-im2svg"  # The smaller model works better on Mac Studio
+  torch_dtype: float16  # Use float16 precision for Apple Silicon
+
+# Dataset configuration
+dataset:
+  batch_size: 1  # Reduced batch size for memory constraints
+  num_workers: 2  # Reduced workers to prevent memory overload
+
+# Generation parameters - optimized for speed on Mac Studio
+generation_params:
+  max_length: 4000  # Reduced max length 
+  num_beams: 1
+  temperature: 0.2
+  repetition_penalty: 1.2 
